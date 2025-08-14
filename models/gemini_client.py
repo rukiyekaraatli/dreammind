@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from loguru import logger
 from dotenv import load_dotenv
 
@@ -39,7 +39,7 @@ CHARACTER_THERAPY_PROMPTS = {
     Karakteristik özelliklerin: Sakin, derin, zeki, her şeyi görmüş geçirmiş bir İstanbul beyefendisi. Sıklıkla metaforlar ve kısa ama etkili cümleler kullanırsın.
     Kullanıcının içindeki intikamı, pişmanlığı ya da kırgınlığı anlamaya çalış. Gerekirse susarak destek ol, gerekirse kelimelerinle yön göster.
     "Bir intikam varsa içinde, önce kendinden başla yeğen..." gibi anlam yüklü sözlerle empati kur.
-    Terapiye şiirsel bir hikâye gibi yaklaş. Konuşmaların ağır ama etkili olsun. Her kelimen bir yeri dağlasın.
+    Terapiye şiirsel bir hikâye gibi yaklaş. Konuşmaların ağır ama etkili olsun. Her kelim bir yeri dağlasın.
     """,
     "Aksakallı Dede": """
     Sen Aksakallı Dede’sin (Leyla ile Mecnun). Kullanıcının ruh hâlini maneviyat, bilgelik ve metaforlarla ele al.
@@ -74,21 +74,13 @@ CHARACTER_THERAPY_PROMPTS = {
     """
 }
 
-def fallback_character_therapy(character: str, user_input: str) -> str:
-    """
-    Hugging Face veya basit bir yedek karakter yanıtı fonksiyonu.
-    """
-    return f"{character} (fallback): Şu anda AI servisi kullanılamıyor. Sorunuz: {user_input[:100]}..."
-
 # .env dosyasından API anahtarını yükle
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Prompt şablonu (proje dokümanından)
 DREAM_ANALYSIS_PROMPT = """
-Sen uzman bir rüya analisti ve psikologsun. Kullanıcının anlattığı rüyayı derinlemesine analiz et.
-
-RÜYA: {dream_text}
+Sen uzman bir rüya analisti ve psikologsun. Kullanıcının anlattığı rüyayı derinlemesine analiz et. Analizini yaptıktan sonra, rüya hakkında daha fazla bilgi edinmek veya farklı bir bakış açısı sunmak için kullanıcıya bir veya iki soru sor. Kullanıcıyı sohbete teşvik et.
 
 ANALİZ YAPISI:
 🔮 **Ana Temalar**: Rüyada öne çıkan başlıca konular
@@ -100,15 +92,57 @@ ANALİZ YAPISI:
 Sıcak, empatik ve bilgilendirici bir dil kullan. Türkçe yanıtla.
 """
 
+class GeminiChatSession:
+    def __init__(self, api_key: str, model_name: str = "gemini-1.5-flash", system_instruction: Optional[str] = None):
+        if not api_key:
+            raise ValueError("Gemini API key is not provided.")
+        if genai is None:
+            raise ImportError("google.generativeai modülü yüklü değil.")
+        
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel(model_name=model_name, system_instruction=system_instruction)
+        self.chat = self.model.start_chat(history=[])
+        self.history = [] # To store history in a format suitable for Streamlit display
+
+    def send_message(self, user_message: str) -> str:
+        try:
+            response = self.chat.send_message(user_message)
+            # Update internal history for Streamlit display
+            self.history.append({"role": "user", "parts": [user_message]})
+            self.history.append({"role": "model", "parts": [response.text]})
+            return response.text
+        except Exception as e:
+            logger.error(f"Gemini chat error: {e}")
+            return f"Üzgünüm, bir hata oluştu: {e}"
+
+    def get_full_history(self) -> List[Dict[str, Any]]:
+        return self.history
+
+    def clear_history(self):
+        self.chat = self.model.start_chat(history=[])
+        self.history = []
+
+# --- Specific Chatbot Functions using GeminiChatSession ---
+def start_dream_analysis_chat() -> Optional[GeminiChatSession]:
+    if not GEMINI_API_KEY:
+        logger.warning("Gemini API anahtarı eksik. Rüya analizi sohbeti başlatılamıyor.")
+        return None
+    return GeminiChatSession(GEMINI_API_KEY, system_instruction=DREAM_ANALYSIS_PROMPT)
+
+def start_character_therapy_chat(character_name: str) -> Optional[GeminiChatSession]:
+    if not GEMINI_API_KEY:
+        logger.warning("Gemini API anahtarı eksik. Karakter terapisi sohbeti başlatılamıyor.")
+        return None
+    
+    system_instruction = CHARACTER_THERAPY_PROMPTS.get(character_name, "")
+    if not system_instruction:
+        system_instruction = "Sen bir AI terapistsin. Kullanıcının sorunlarını dinle ve ona yardımcı olmaya çalış." # Default if character not found
+        
+    return GeminiChatSession(GEMINI_API_KEY, system_instruction=system_instruction)
+
+# --- Old functions (kept for reference, will be removed or adapted) ---
 def analyze_dream(dream_text: str, debug: bool = False) -> str:
-    """
-    Google Gemini API ile rüya analizi yapar. Hata durumunda fallback döner.
-    Args:
-        dream_text (str): Kullanıcının rüya metni
-        debug (bool): Debug modunda loglama açılır
-    Returns:
-        str: Analiz sonucu veya hata mesajı
-    """
+    # This function will be replaced by the chat-based approach
     if not dream_text.strip():
         return "Lütfen analiz için bir rüya metni girin."
     if not GEMINI_API_KEY or genai is None:
@@ -119,7 +153,6 @@ def analyze_dream(dream_text: str, debug: bool = False) -> str:
         model = genai.GenerativeModel("gemini-1.5-flash")
         prompt = DREAM_ANALYSIS_PROMPT.format(dream_text=dream_text)
         response = model.generate_content(prompt)
-        # Yanıt validasyonu
         if hasattr(response, "text") and response.text:
             return response.text
         else:
@@ -132,15 +165,7 @@ def analyze_dream(dream_text: str, debug: bool = False) -> str:
         return fallback_dream_analysis(dream_text) 
 
 def character_therapy_response(character: str, user_input: str, debug: bool = False) -> str:
-    """
-    Seçilen karaktere uygun AI yanıtı üretir. Gemini API ile, hata durumunda fallback ile çalışır.
-    Args:
-        character (str): Karakter adı
-        user_input (str): Kullanıcı mesajı
-        debug (bool): Debug modunda loglama açılır
-    Returns:
-        str: Karakterin AI yanıtı
-    """
+    # This function will be replaced by the chat-based approach
     if not user_input.strip():
         return "Lütfen bir mesaj girin."
     if not GEMINI_API_KEY or genai is None:
@@ -160,4 +185,4 @@ def character_therapy_response(character: str, user_input: str, debug: bool = Fa
         logger.error(f"Gemini API hatası: {e}")
         if debug:
             return f"[DEBUG] Hata: {e}"
-        return fallback_character_therapy(character, user_input) 
+        return fallback_character_therapy(character, user_input)
