@@ -32,6 +32,7 @@ config/
 pip install -r requirements.txt
 streamlit run main.py
 ```
+#Tarayıcıda http://localhost:8501 veya http://127.0.0.1:8501 adresini açmayı dene.
 
 ## Lisans
 MIT 
